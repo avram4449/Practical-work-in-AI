@@ -1,0 +1,10 @@
+name: tox21
+shape: [2048]
+num_classes: 12
+mean: 0.0
+std: 1.0
+transform_train: null
+transform_test: null
+batch_size: 128
+num_workers: 20
+persistent_workers: true

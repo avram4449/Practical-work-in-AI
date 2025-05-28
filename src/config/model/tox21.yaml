@@ -1,0 +1,16 @@
+name: fcnet                     # model architecture identifier
+dropout: 0.6                    # dropout rate
+k: 1                            # number of MC samples
+load_pretrained: false          # whether to load pretrained weights
+use_ema: false                  # use Exponential Moving Average model
+ema_decay: 0.999                # decay for EMA
+use_swa: false                  # use Stochastic Weight Averaging
+swa_epoch_start: 160            # SWA start epoch
+swa_lr: 0.05                    # learning rate for SWA
+learning_rate: 0.0001           # base learning rate
+weight_decay: 0.005             # weight decay for regularization
+momentum: 0.9                   # momentum (used by SGD)
+exclude_bn_bias: true           # whether to exclude batch norm and bias from weight decay
+weighted_loss: false            # use class-weighted NLL loss
+freeze_encoder: false           # whether to freeze the encoder during training
+finetune: false                 # if true, apply separate learning rates to encoder/classifier

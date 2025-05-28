@@ -1,0 +1,31 @@
+defaults:
+  - trainer: base
+  - _self_
+  - data: cifar10
+  - optim: sgd_fixmatch
+  # - model: wideresnet-cifar10
+  - model: resnet_fixmatch
+  # - hydra/job_logging: colorlog
+  # - hydra/hydra_logging: colorlog
+  - sem_sl : fixmatch
+  - query: entropy
+  - active: standard
+
+trainer:
+  batch_size: 64
+  num_workers: 10
+  # persistent_workers: True # BatchGenerators impl. has this always true
+  max_epochs: 200
+  min_epochs: 50
+  experiment_name: test_fixmatch
+  train_iters_per_epoch: 1000
+  load_best_ckpt: False
+  save_last: True
+  # enable_progress_bar: True
+
+hydra:
+  run:
+    dir: ${trainer.experiments_root}/${trainer.experiment_name}/${trainer.experiment_id}
+
+# test:
+#   checkpoint_path:

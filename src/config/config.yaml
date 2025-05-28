@@ -1,0 +1,30 @@
+defaults:
+  - trainer: base
+  - _self_
+  - data: tox21
+  - optim: adam
+  - scheduler: reduce_on_plateau
+  - model: tox21
+  # - hydra/job_logging: colorlog
+  # - hydra/hydra_logging: colorlog
+  - active: standard
+  - query: bald
+
+trainer:
+  batch_size: 128
+  num_workers: 20
+  persistent_workers: True
+  max_epochs: 20
+  min_epochs: 10
+  experiment_name: test
+  data_root: C:/FILES/jku/Semester 6/Practical work/realistic-al-open-source/data
+  experiments_root: C:/FILES/jku/Semester 6/Practical work/realistic-al-open-source/experiments
+  early_stop: true
+  early_stop_monitor: val/acc
+  early_stop_mode: max
+  early_stop_patience: 15
+  early_stop_min_delta: 0.00001
+
+hydra:
+  run:
+    dir: ${trainer.experiments_root}/${trainer.experiment_name}/${trainer.experiment_id}

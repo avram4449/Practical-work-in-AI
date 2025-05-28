@@ -1,0 +1,7 @@
+_target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+monitor: val/acc
+mode: max
+factor: 0.5
+patience: 5
+min_lr: 1e-6
+verbose: true

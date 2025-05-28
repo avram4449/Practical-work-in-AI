@@ -1,0 +1,73 @@
+trainer:
+  seed: 12345
+  batch_size: 128
+  num_workers: 20
+  persistent_workers: true
+  max_epochs: 13
+  min_epochs: 10
+  fast_dev_run: false
+  data_root: C:/FILES/jku/Semester 6/Practical work/realistic-al-open-source/data
+  experiments_root: C:/FILES/jku/Semester 6/Practical work/realistic-al-open-source/experiments
+  experiment_name: test
+  experiment_id: 2025-05-27_14-51-09-300412
+  n_gpus: 1
+  check_val_every_n_epoch: 1
+  progress_bar_refresh_rate: 1
+  gradient_clip_val: 0
+  early_stop: true
+  precision: 32
+  deterministic: false
+  profiler: null
+  load_best_ckpt: true
+  save_last: false
+  timeout: 60
+  run_test: true
+  early_stop_monitor: val/loss
+  early_stop_mode: min
+  early_stop_patience: 5
+  early_stop_min_delta: 0.0001
+data:
+  name: tox21
+  shape:
+  - 2048
+  num_classes: 12
+  mean: 0.0
+  std: 1.0
+  transform_train: null
+  transform_test: null
+  batch_size: 128
+  num_workers: 20
+  persistent_workers: true
+optim:
+  optimizer:
+    name: adam
+    momentum: 0.9
+  lr_scheduler:
+    name: steplr
+model:
+  name: fcnet
+  dropout: 0.5
+  k: 1
+  load_pretrained: false
+  use_ema: false
+  ema_decay: 0.999
+  use_swa: false
+  swa_epoch_start: 160
+  swa_lr: 0.05
+  learning_rate: 0.0001
+  weight_decay: 0.001
+  momentum: 0.9
+  exclude_bn_bias: true
+  weighted_loss: false
+  freeze_encoder: false
+  finetune: false
+active:
+  num_labelled: 1000
+  acq_size: 250
+  num_iter: 20
+  min_train: 500
+  balanced: true
+  random_split: true
+  m: null
+query:
+  name: bald
