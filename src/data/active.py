@@ -170,12 +170,20 @@ class ActiveLearningDataset(torchdata.Dataset):
         return [int(lbl_nz[idx].squeeze().item()) for idx in index]
 
     def _oracle_to_pool_index(self, index: Union[int, List[int]]) -> List[int]:
-        if isinstance(index, int):
-            index = [index]
+        # Accept Python int, numpy.int64, etc.
+        if isinstance(index, (int, np.integer)):
+            index = [int(index)]
 
-        # Pool indices are the unlabelled, starts at 0
-        lbl_cs = np.cumsum(~self.labelled) - 1
-        return [int(lbl_cs[idx].squeeze().item()) for idx in index]
+        lbl_cs = np.cumsum(~self.labelled) - 1  # maps oracle idx -> pool idx
+        out = []
+        for idx in index:
+            if idx < 0 or idx >= len(lbl_cs):
+                raise IndexError(f"Oracle index {idx} out of range 0..{len(lbl_cs)-1}")
+            pool_idx = lbl_cs[idx]
+            if pool_idx < 0:  # already labelled
+                raise ValueError(f"Oracle index {idx} is already labelled.")
+            out.append(int(pool_idx))
+        return out
 
     def label(self, index: Union[list, int], value: Optional[Any] = None) -> None:
         """

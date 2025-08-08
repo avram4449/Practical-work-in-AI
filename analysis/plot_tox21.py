@@ -2,108 +2,77 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from sklearn.metrics import roc_curve, roc_auc_score, accuracy_score, log_loss
 
-# Set this to your experiment folder containing stored.npz or test_metrics.csv
-RESULTS_DIR = r"c:\FILES\jku\Semester 6\Practical work\realistic-al-open-source\experiments\test\2025-05-27_16-15-54-940046"
+RESULTS_DIR = r"C:\FILES\jku\Semester 6\Practical work\realistic-al-open-source\experiments\test\2025-07-02_14-59-40-835377\loop-19"
+CSV_PATH = os.path.join(RESULTS_DIR, "test_predictions.csv")
 
-def annotate_points(x, y, ax, fmt="{:.9f}"):
-    for xi, yi in zip(x, y):
-        ax.annotate(fmt.format(yi), (xi, yi), textcoords="offset points", xytext=(0,5), ha='center', fontsize=8, color='black')
+TARGET_NAMES = [
+    "NR.AhR", "NR.AR", "NR.AR.LBD", "NR.Aromatase", "NR.ER", "NR.ER.LBD",
+    "NR.PPAR.gamma", "SR.ARE", "SR.ATAD5", "SR.HSE", "SR.MMP", "SR.p53"
+]
 
-def plot_from_stored_npz(results_dir):
-    npz_path = os.path.join(results_dir, "stored.npz")
-    if not os.path.exists(npz_path):
-        print(f"stored.npz not found in {results_dir}")
-        return
-    data = np.load(npz_path)
-    num_samples = data["num_samples"]
-    test_acc = data["test_acc"]
-    val_acc = data["val_acc"]
-    test_loss = data["test_loss"] if "test_loss" in data else None
-    val_loss = data["val_loss"] if "val_loss" in data else None
-
-    # Accuracy plot
-    plt.figure(figsize=(10, 6))
-    ax = plt.gca()
-    plt.plot(num_samples, test_acc, marker='o', label="Test Accuracy")
-    plt.plot(num_samples, val_acc, marker='s', label="Validation Accuracy")
-    annotate_points(num_samples, test_acc, ax)
-    annotate_points(num_samples, val_acc, ax)
-    plt.xlabel("Number of Labelled Samples")
-    plt.ylabel("Accuracy")
-    plt.title("Active Learning Progress: Accuracy")
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.7)
-    plt.tight_layout()
-    plt.show()
-
-    # Loss plot (if available)
-    if test_loss is not None or val_loss is not None:
-        plt.figure(figsize=(10, 6))
-        ax = plt.gca()
-        if test_loss is not None:
-            plt.plot(num_samples, test_loss, marker='o', label="Test Loss", color='red')
-            annotate_points(num_samples, test_loss, ax, fmt="{:.4f}")
-        if val_loss is not None:
-            plt.plot(num_samples, val_loss, marker='s', label="Validation Loss", color='orange')
-            annotate_points(num_samples, val_loss, ax, fmt="{:.4f}")
-        plt.xlabel("Number of Labelled Samples")
-        plt.ylabel("Loss")
-        plt.title("Active Learning Progress: Loss")
-        plt.legend()
-        plt.grid(True, linestyle='--', alpha=0.7)
-        plt.tight_layout()
-        plt.show()
-
-def plot_from_test_metrics(results_dir):
-    csv_path = os.path.join(results_dir, "test_metrics.csv")
-    if not os.path.exists(csv_path):
-        print(f"test_metrics.csv not found in {results_dir}")
-        return
+def plot_all_metrics(csv_path, n_targets=12, target_names=None):
+    if target_names is None:
+        target_names = [f"Target {i}" for i in range(n_targets)]
     df = pd.read_csv(csv_path)
-    if "num_labelled" in df.columns:
-        x = df["num_labelled"]
-    elif "iteration" in df.columns:
-        x = df["iteration"]
-    else:
-        x = range(len(df))
-
-    # Accuracy plot
-    plt.figure(figsize=(10, 6))
-    ax = plt.gca()
-    if "test/acc" in df.columns:
-        plt.plot(x, df["test/acc"], marker='o', label="Test Accuracy")
-        annotate_points(x, df["test/acc"], ax)
-    if "val/acc" in df.columns:
-        plt.plot(x, df["val/acc"], marker='s', label="Validation Accuracy")
-        annotate_points(x, df["val/acc"], ax)
-    plt.xlabel("Number of Labelled Samples" if "num_labelled" in df.columns else "Iteration")
-    plt.ylabel("Accuracy")
-    plt.title("Active Learning Progress: Accuracy")
+    aucs, accs, losses = [], [], []
+    plt.figure(figsize=(10, 8))
+    for i in range(n_targets):
+        y_true = df[f"true_target_{i}"]
+        y_score = df[f"pred_target_{i}"]
+        if y_true.nunique() < 2:
+            aucs.append(np.nan)
+            accs.append(np.nan)
+            losses.append(np.nan)
+            continue
+        # ROC curve
+        fpr, tpr, _ = roc_curve(y_true, y_score)
+        auc = roc_auc_score(y_true, y_score)
+        aucs.append(auc)
+        accs.append(accuracy_score(y_true, (y_score > 0.5).astype(int)))
+        losses.append(log_loss(y_true, y_score, labels=[0,1]))
+        plt.plot(fpr, tpr, label=f"{target_names[i]} (AUC={auc:.2f})")
+    plt.plot([0, 1], [0, 1], "k--", alpha=0.5)
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title("ROC Curves per Target")
     plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.7)
     plt.tight_layout()
     plt.show()
 
-    # Loss plot
-    if "test/loss" in df.columns or "val/loss" in df.columns:
-        plt.figure(figsize=(10, 6))
-        ax = plt.gca()
-        if "test/loss" in df.columns:
-            plt.plot(x, df["test/loss"], marker='o', label="Test Loss", color='red')
-            annotate_points(x, df["test/loss"], ax, fmt="{:.4f}")
-        if "val/loss" in df.columns:
-            plt.plot(x, df["val/loss"], marker='s', label="Validation Loss", color='orange')
-            annotate_points(x, df["val/loss"], ax, fmt="{:.4f}")
-        plt.xlabel("Number of Labelled Samples" if "num_labelled" in df.columns else "Iteration")
-        plt.ylabel("Loss")
-        plt.title("Active Learning Progress: Loss")
-        plt.legend()
-        plt.grid(True, linestyle='--', alpha=0.7)
-        plt.tight_layout()
-        plt.show()
+    # Log Loss
+    plt.figure(figsize=(10, 4))
+    plt.bar(target_names, losses)
+    plt.xlabel("Target")
+    plt.ylabel("Log Loss")
+    plt.title("Per-target Log Loss")
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
+
+    # Accuracy
+    plt.figure(figsize=(10, 4))
+    plt.bar(target_names, accs)
+    plt.xlabel("Target")
+    plt.ylabel("Accuracy")
+    plt.title("Per-target Accuracy")
+    plt.ylim(0, 1)
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
+
+    # ROC AUC
+    plt.figure(figsize=(10, 4))
+    plt.bar(target_names, aucs)
+    plt.xlabel("Target")
+    plt.ylabel("ROC AUC")
+    plt.title("Per-target ROC AUC")
+    plt.ylim(0, 1)
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
 
 if __name__ == "__main__":
-    # Try both plotting methods
-    plot_from_stored_npz(RESULTS_DIR)
-    plot_from_test_metrics(RESULTS_DIR)
+    plot_all_metrics(CSV_PATH, n_targets=12, target_names=TARGET_NAMES)
+

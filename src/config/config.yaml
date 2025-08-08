@@ -14,7 +14,7 @@ trainer:
   batch_size: 128
   num_workers: 20
   persistent_workers: True
-  max_epochs: 20
+  max_epochs: 50
   min_epochs: 10
   experiment_name: test
   data_root: C:/FILES/jku/Semester 6/Practical work/realistic-al-open-source/data
@@ -24,6 +24,7 @@ trainer:
   early_stop_mode: max
   early_stop_patience: 15
   early_stop_min_delta: 0.00001
+  seed: 23456
 
 hydra:
   run:

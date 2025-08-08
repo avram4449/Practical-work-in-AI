@@ -1,7 +1,9 @@
 num_labelled: 500      # ~4% of training set
 acq_size: 250          # acquire 250 per iteration
 num_iter: 20           # 500 + 250*20 = 5,500 (well below 11,764)
-min_train: 500         # should match num_labelled or be less
+min_train: 100         # should match num_labelled or be less
 balanced: True
 random_split: True
 m: Null
+diversity_rerank: true        # enable BALD + diversity
+diversity_oversample: 5       # take top (factor * acq_size) before diversity filter

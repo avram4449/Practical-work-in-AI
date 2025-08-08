@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, Optional, Union
 
 import numpy as np
+import pandas as pd
 import pytorch_lightning as pl
 import torch
 from loguru import logger
@@ -30,7 +31,7 @@ class ActiveTrainingLoop(object):
         datamodule: TorchVisionDM,
         count: Union[None, int] = None,
         active: bool = True,
-        base_dir: str = os.getcwd(),  # TODO: change this to some other value!
+        base_dir: str = os.getcwd(), 
         loggers: str = True,
     ):
         # Class capturing the logic for Active Training Loops.
@@ -171,16 +172,23 @@ class ActiveTrainingLoop(object):
         )
 
     def _fit(self):
-        """Performs the fit, selects the best performing model and cleans up cache."""
-        datamodule = self.model.wrap_dm(self.datamodule)
-        self.model.setup_data_params(datamodule)
-        self.trainer.fit(model=self.model, datamodule=datamodule)
+        dm = self.model.wrap_dm(self.datamodule)
+        # Initial pos_weight
+        self.model.setup_data_params(dm)
+
+        self.trainer.fit(model=self.model, datamodule=dm)
+
         if not self.cfg.trainer.fast_dev_run and self.cfg.trainer.load_best_ckpt:
             best_path = self.ckpt_callback.best_model_path
-            logger.info("Final Model from: {}".format(best_path))
-            self.model = self.model.load_from_checkpoint(best_path)
+            logger.info(f"Final Model from: {best_path}")
+            # STRICT load (no silent skips)
+            self.model = self.model.load_from_checkpoint(best_path, strict=True)
+            # Recompute pos_weight for CURRENT labelled set (active learning changed it)
+            self.model.setup_data_params(dm)
+            logger.info("Recomputed pos_weight after checkpoint restore.")
         else:
-            logger.info("Final Model from last iteration.")
+            logger.info("Using last model (no best ckpt reload).")
+
         gc.collect()
         torch.cuda.empty_cache()
 
@@ -219,6 +227,37 @@ class ActiveTrainingLoop(object):
         save_path = self.log_dir / "save_dict.json"
         save_json(self._save_dict, save_path)
 
+    @staticmethod
+    def save_test_predictions(model, datamodule, log_dir):
+        model.eval()
+        test_loader = datamodule.test_dataloader()
+        preds = []
+        trues = []
+        indices = []
+        # Try to get SMILES or IDs if available
+        smiles_list = getattr(datamodule.test_dataset, "smiles", None)
+        ids_list = getattr(datamodule.test_dataset, "ID", None)
+        for i, (x, y) in enumerate(test_loader):
+            with torch.no_grad():
+                x = x.to(model.device)
+                logits = model(x)
+                probas = torch.sigmoid(logits).cpu().numpy()
+                preds.append(probas)
+                trues.append(y.cpu().numpy())
+                indices.extend(range(i * test_loader.batch_size, i * test_loader.batch_size + len(x)))
+        preds = np.vstack(preds)
+        trues = np.vstack(trues)
+        df = pd.DataFrame(preds, columns=[f"pred_target_{i}" for i in range(preds.shape[1])])
+        for i in range(trues.shape[1]):
+            df[f"true_target_{i}"] = trues[:, i]
+        df["index"] = indices
+        # Optionally add SMILES or IDs if available
+        if smiles_list is not None:
+            df["smiles"] = smiles_list
+        if ids_list is not None:
+            df["ID"] = ids_list
+        df.to_csv(os.path.join(log_dir, "test_predictions.csv"), index=False)
+
     def main(self):
         """Executing logic of the Trainer.
         setup_..., init_..., fit, test, final_callback"""
@@ -231,4 +270,6 @@ class ActiveTrainingLoop(object):
             return
         if self.cfg.trainer.run_test:
             self._test()
+            # --- Save per-compound predictions after test ---
+            ActiveTrainingLoop.save_test_predictions(self.model, self.datamodule, self.log_dir)
         self.final_callback()

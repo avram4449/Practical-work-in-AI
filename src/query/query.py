@@ -15,6 +15,15 @@ from query.storing import ActiveStore
 from . import query_diversity, query_uncertainty
 
 
+def enable_dropout_only(model):
+    """Set Dropout layers to train mode, BatchNorm layers to eval mode."""
+    for m in model.modules():
+        if isinstance(m, torch.nn.Dropout):
+            m.train()
+        elif isinstance(m, torch.nn.modules.batchnorm._BatchNorm):
+            m.eval()
+
+
 class QuerySampler:
     def __init__(
         self,
@@ -152,17 +161,54 @@ class QuerySampler:
         if pool_len == 0:
             raise ValueError("No unlabelled samples left in the pool for acquisition.")
         if self.acq_method.split("_")[0] in query_uncertainty.NAMES:
-            acq_function = query_uncertainty.get_acq_function(self.cfg, self.model)
-            post_acq_function = query_uncertainty.get_post_acq_function(
-                self.cfg, device=self.device
-            )
-            acq_ind, acq_scores = query_uncertainty.query_sampler(
-                pool_loader,
-                acq_function,
-                post_acq_function,
-                acq_size=acq_size,
-                device=self.device,
-            )
+            prev_mode = self.model.training
+            enable_dropout_only(self.model)
+            import torch
+
+            with torch.no_grad():
+                acq_function = query_uncertainty.get_acq_function(self.cfg, self.model)
+                post_acq_function = query_uncertainty.get_post_acq_function(
+                    self.cfg, device=self.device
+                )
+                acq_ind, acq_scores = query_uncertainty.query_sampler(
+                    pool_loader,
+                    acq_function,
+                    post_acq_function,
+                    acq_size=acq_size,
+                    device=self.device,
+                )
+            if isinstance(acq_scores, np.ndarray) and np.allclose(acq_scores.var(), 0):
+                print("WARNING: Acquisition scores variance is ~0 (uncertainty collapse).")
+            # Diversity re-rank (optional)
+            if self.acq_method.startswith("bald") and getattr(self.cfg.active, "diversity_rerank", False):
+                oversample = getattr(self.cfg.active, "diversity_oversample", 5)
+                top_k = min(len(acq_scores), oversample * acq_size)
+                top_inds = acq_ind[:top_k]
+                # Extract features for candidate pool
+                feat_list = []
+                self.model.eval()  # deterministic features
+                with torch.no_grad():
+                    for idx in top_inds:
+                        x,_ = pool_loader.dataset[idx]
+                        x = x.to(self.device).unsqueeze(0)
+                        feats = self.model.model.get_features(x)  # underlying MLP
+                        feat_list.append(feats.cpu())
+                feats = torch.cat(feat_list, dim=0)
+                feats = torch.nn.functional.normalize(feats, dim=1)
+                # Farthest-first selection
+                sel = []
+                if feats.size(0) > 0:
+                    dmat = 1 - feats @ feats.T  # cosine distance
+                    # start with highest BALD score
+                    sel.append(0)
+                    while len(sel) < min(acq_size, feats.size(0)):
+                        remaining = list(set(range(feats.size(0))) - set(sel))
+                        min_d = dmat[remaining][:, sel].min(dim=1).values
+                        next_idx = remaining[int(min_d.argmax().item())]
+                        sel.append(next_idx)
+                acq_ind = top_inds[sel]
+                acq_scores = acq_scores[sel]
+            self.model.train(prev_mode)  # Restore previous mode
         elif self.acq_method.split("_")[0] in query_diversity.NAMES:
             acq_ind, acq_scores = query_diversity.query_sampler(
                 self.cfg, self.model, labeled_loader, pool_loader, acq_size=acq_size

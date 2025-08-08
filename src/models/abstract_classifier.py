@@ -8,39 +8,32 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
-import torchvision
+from torchmetrics.classification import MultilabelAccuracy, MultilabelAUROC
+from torch.nn import functional as F
 from loguru import logger
-from pl_bolts.optimizers.lr_scheduler import linear_warmup_decay
-from pytorch_lightning.loggers import TensorBoardLogger
-from torchmetrics.classification import Accuracy
-from torchmetrics.classification import MultilabelAUROC
-
 from .callbacks.ema_callback import EMAWeightUpdate
 from .utils import exclude_from_wt_decay, freeze_layers, load_from_ssl_checkpoint
-
+from pytorch_lightning.loggers import TensorBoardLogger
 
 class AbstractClassifier(pl.LightningModule):
-    def __init__(self, eman: bool = True):
-        """Abstract Classifier carrying the logic for Bayesian Models with MC Dropout and logging for base values.
-        Dropout is per default used always, also during validation due to make use of its Bayesian properties.
-
-        Args:
-            eman (bool, optional): Whether or not to use Exponentially Moving AVerage Norm model. Defaults to True.
-        """
+    def __init__(self, *, num_classes: int = 12, **kwargs):
         super().__init__()
+        # Metrics
+        self.num_classes = num_classes
+        self.acc_train = MultilabelAccuracy(num_labels=num_classes)
+        self.acc_val = MultilabelAccuracy(num_labels=num_classes)
+        self.acc_test = MultilabelAccuracy(num_labels=num_classes)
+        self.auc_val = MultilabelAUROC(num_labels=num_classes)
+        self.auc_test = MultilabelAUROC(num_labels=num_classes)
 
-        # general model
+        # Stable pos_weight buffer (always present, avoids missing key warnings)
+        pw = torch.ones(num_classes, dtype=torch.float32)
+        self.register_buffer("pos_weight", pw)
+        self.loss_fct = nn.BCEWithLogitsLoss(pos_weight=self.pos_weight)
+
         self.train_iters_per_epoch = None
-
         self.ema_model = None
-        self.eman = eman
-
-        self.acc_train = Accuracy(task="multilabel", num_labels=12)
-        self.acc_val = Accuracy(task="multilabel", num_labels=12)
-        self.acc_test = Accuracy(task="multilabel", num_labels=12)
-        self.auc_val = MultilabelAUROC(num_labels=12)
-        self.auc_test = MultilabelAUROC(num_labels=12)
-        self.loss_fct = nn.BCEWithLogitsLoss()
+        self.eman = kwargs.get('eman', True)
 
     def forward(
         self, x: torch.Tensor, k: int = None, agg: bool = True, ema: bool = False
@@ -59,14 +52,37 @@ class AbstractClassifier(pl.LightningModule):
         model_forward = self.select_forward_model(ema=ema)
 
         if k is None:
+            # Use full MC only when not in training (e.g. acquisition / eval uncertainty)
             k = getattr(self, 'k', 1)
+            if self.training:
+                k = 1  # keep training fast
 
         sig = inspect.signature(model_forward.forward if hasattr(model_forward, 'forward') else model_forward)
+
+        # If the underlying model supports internal k we can pass it, else loop
         if 'k' in sig.parameters:
             out = model_forward(x, k)
+            # Expect shape [B,K,C] when k>1, else [B,C]
         else:
-            out = model_forward(x)
-        return out
+            if k > 1:
+                outs = []
+                # Ensure dropout active if caller set model to train()/custom mode
+                for _ in range(k):
+                    outs.append(model_forward(x))
+                out = torch.stack(outs, dim=1)  # [B,K,C]
+            else:
+                out = model_forward(x)  # [B,C]
+
+        if agg:
+            # If we produced MC samples, aggregate by mean (logits)
+            if out.dim() == 3:
+                return out.mean(dim=1)
+            return out
+        else:
+            # For downstream uncertainty code we always want [B,K,C]
+            if out.dim() == 2:
+                out = out.unsqueeze(1)  # [B,1,C]
+            return out
 
     def mc_nll(self, logits: torch.Tensor) -> torch.Tensor:
         """Computs mean logits as required for predictive entropy
@@ -84,10 +100,14 @@ class AbstractClassifier(pl.LightningModule):
         return out
 
     def training_step(self, batch, batch_idx):
-        loss, logprob, preds, y = self.step(batch)
-        self.acc_train.update(preds, y)
-        self.log("train/loss", loss, on_step=False, on_epoch=True)
-        self.log("train/acc", self.acc_train.compute(), on_step=False, on_epoch=True)
+        x, y = batch
+        y = y.float()
+        logits = self(x)
+        loss = self.loss_fct(logits, y)
+        probs = torch.sigmoid(logits)
+        preds = (probs > 0.5).int()
+        self.acc_train.update(preds, y.int())
+        self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=True)
         return loss
 
     def select_forward_model(self, ema: bool = False) -> torch.nn.Module:
@@ -135,26 +155,54 @@ class AbstractClassifier(pl.LightningModule):
                 param.requires_grad = False
             self.ema_weight_update = EMAWeightUpdate(eman=self.eman)
 
+    def _compute_pos_weight_from_labelled(self, dm: pl.LightningDataModule):
+        # Use ONLY labelled subset
+        ds = dm.train_set  # ActiveLearningDataset
+        if not hasattr(ds, "labelled"):
+            return
+        labelled_mask = ds.labelled
+        if labelled_mask.sum() == 0:
+            return
+        ys = []
+        for idx, is_lab in enumerate(labelled_mask):
+            if not is_lab:
+                continue
+            _, y = ds._dataset[idx]  # underlying dataset item
+            ys.append(torch.as_tensor(y).unsqueeze(0))
+        if not ys:
+            return
+        y_all = torch.cat(ys, dim=0).float()  # [L,C] floats 0/1
+        freq = y_all.mean(0).clamp(min=1e-6, max=1 - 1e-6)
+        new_pw = (1 - freq) / freq
+        new_pw = new_pw.clamp(max=10.0)  # <-- Cap pos_weight to 10.0
+        if new_pw.shape != self.pos_weight.shape:
+            # shape mismatch (should not happen) -> resize buffer
+            self.register_buffer("pos_weight", new_pw.clone())
+        else:
+            self.pos_weight.copy_(new_pw)
+        self.loss_fct = nn.BCEWithLogitsLoss(pos_weight=self.pos_weight)
+        logger.info(f"pos_weight updated: {new_pw.cpu().numpy()}  freq={freq.cpu().numpy()}")
+
+    def setup_data_params(self, dm: pl.LightningDataModule):
+        tl = dm.train_dataloader()
+        if isinstance(tl, (list, tuple)):
+            self.train_iters_per_epoch = max(len(x) for x in tl)
+        else:
+            self.train_iters_per_epoch = len(tl)
+        if getattr(self.hparams, "data", {}).get("multilabel", True):
+            self._compute_pos_weight_from_labelled(dm)
+
     def step(
         self, batch: Tuple[torch.tensor, torch.tensor], k: int = None
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Standard supervised step using provided loss function.
-
-        Args:
-            batch (Tuple[torch.tensor, torch.tensor]): Data from Dataloader.
-            k (int, optional): #MC sampels. Defaults to None.
-
-        Returns:
-            Tuple[torch.tensor, torch.tensor, torch.tensor, torch.tensor]: loss, logprob, predictions, labels
-        """
-        x, y = batch
-        logprob = self.forward(x)
-        loss = self.loss_fct(logprob, y)
-        preds = (torch.sigmoid(logprob) > 0.5).float()
-        return loss, logprob, preds, y
+        x, y = batch  # y shape [B,C] multi-label 0/1
+        logits = self.forward(x)
+        loss = self.loss_fct(logits, y)
+        preds = (torch.sigmoid(logits) > 0.5).float()
+        return loss, logits, preds, y
 
     def validation_step(
-        self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int, *args, **kwargs
+        self, batch, batch_idx, *args, **kwargs
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Supervised validation step.
 
@@ -166,18 +214,16 @@ class AbstractClassifier(pl.LightningModule):
             Tuple[torch.Tensor, torch.Tensor]: logprob, labels
         """
         mode = "val"
-        loss, logprob, preds, y = self.step(batch)
-        self.acc_val.update(preds, y)
-        self.auc_val.update(torch.sigmoid(logprob), y.long())
+        loss, logits, preds, y = self.step(batch)
+        y_int = y.int()  # <-- Ensure integer type
+        self.acc_val.update(preds, y_int)
+        self.auc_val.update(torch.sigmoid(logits), y_int)
         self.log(f"{mode}/loss", loss, on_step=False, on_epoch=True)
         self.log(f"{mode}/acc", self.acc_val.compute(), on_step=False, on_epoch=True)
-        if batch_idx == 0 and self.current_epoch == 0:
-            if len(batch[0].shape) == 4:
-                self.visualize_inputs(batch[0], name=f"{mode}/data")
-        return logprob, y
+        return logits, y
 
     def test_step(
-        self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int, *args, **kwargs
+        self, batch, batch_idx, *args, **kwargs
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Supervised test step.
 
@@ -189,14 +235,12 @@ class AbstractClassifier(pl.LightningModule):
             Tuple[torch.Tensor, torch.Tensor]: logprob, labels
         """
         mode = "test"
-        loss, logprob, preds, y = self.step(batch)
+        loss, logits, preds, y = self.step(batch)
+        y_int = y.int()  # <-- Ensure integer type
+        self.acc_test.update(preds, y_int)
+        self.auc_test.update(torch.sigmoid(logits), y_int)
         self.log(f"{mode}/loss", loss, on_step=False, on_epoch=True)
-        self.acc_test.update(preds, y)
-        self.auc_test.update(torch.sigmoid(logprob), y.long())
-        if batch_idx == 0:
-            if len(batch[0].shape) == 4:
-                self.visualize_inputs(batch[0], name=f"{mode}/data")
-        return logprob, y
+        return logits, y
 
     def on_train_batch_end(self, outputs: Any, batch: Any, batch_idx: int) -> None:
         """Update the EMA model after every batch.
@@ -259,58 +303,17 @@ class AbstractClassifier(pl.LightningModule):
         self.auc_val.reset()
 
     def on_test_epoch_end(self) -> None:
-        """Log values during test to disk."""
         mode = "test"
         self.log(f"{mode}/acc", self.acc_test.compute(), on_step=False, on_epoch=True)
         auc_test = self.auc_test.compute()
+        print("AUC test shape:", getattr(auc_test, 'shape', 'scalar'), "values:", auc_test)
         if auc_test.ndim == 0:  # scalar
             self.log(f"{mode}/auc_macro", auc_test, on_step=False, on_epoch=True)
         else:
             for i, auc in enumerate(auc_test):
+                print(f"Logging test/auc_class_{i}: {auc}")
                 self.log(f"test/auc_class_{i}", auc, on_step=False, on_epoch=True)
         self.auc_test.reset()
-
-    def setup_data_params(self, dm: pl.LightningDataModule):
-        """Create internal parameter with the amount of training iterations per epoch.
-        Set up weighted loss values if specified in config.
-
-        Args:
-            dm (pl.LightningDataModule): DataModule
-        """
-        train_loader = dm.train_dataloader()
-        if isinstance(train_loader, (tuple, list)):
-            self.train_iters_per_epoch = max([len(loader) for loader in train_loader])
-        else:
-            self.train_iters_per_epoch = len(train_loader)
-
-        # This implementation is correct and uses the amount of labels from the train_loader.
-        # Therefore if Resampling is used, more samples are used.
-        weighted_loss = False
-        if "weighted_loss" in self.hparams.model:
-            weighted_loss: bool = self.hparams.model.weighted_loss
-        if weighted_loss:
-            logger.info("Initializing Weighted Loss")
-            if hasattr(dm.train_set, "targets"):
-                classes: np.ndarray = dm.train_set.targets
-            else:
-                # workaround for FixMatch trainings with multiple dataloaders
-
-                if isinstance(train_loader, (tuple, list)):
-                    # train_loader 0 is the labeled loader
-                    train_loader = train_loader[0]
-                classes = []
-                for x, y in train_loader:
-                    classes.append(y.numpy())
-                classes = np.concatenate(classes)
-
-            classes, class_weights = np.unique(classes, return_counts=True)
-            # computation identical to sklearn balanced class weights
-            # https://github.com/scikit-learn/scikit-learn/blob/36958fb24/sklearn/utils/class_weight.py#L10
-            class_weights = torch.tensor(
-                np.sum(class_weights) / (len(classes) * class_weights),
-                dtype=torch.float,
-            )
-            self.loss_fct = nn.NLLLoss(weight=class_weights)
 
     def configure_optimizers(self):
         params = (
@@ -386,39 +389,11 @@ class AbstractClassifier(pl.LightningModule):
         """
         return dm
 
+    # Optional: strict loading helper if you need manual loads elsewhere
     def load_only_state_dict(self, path: str):
-        """Load the state from checkpoint path.
-
-        Args:
-            path (str): Path to torch loadable file.
-        """
-        ckpt = torch.load(path)
-        logger.debug("Loading Model from Path: {}".format(path))
-        logger.info("Loading checkpoint from Epoch: {}".format(ckpt["epoch"]))
-        self.load_state_dict(ckpt["state_dict"], strict=True)
-
-    def get_best_ckpt(
-        self, experiment_path: Union[str, Path], use_last: bool = True
-    ) -> Path:
-        """Return the path to the best checkpoint
-
-        Args:
-            experiment_path (Union[str, Path]): path to base experiment
-
-        Returns:
-            Path: Best checkpoint path
-        """
-        model_ckpt_path = Path(experiment_path) / "checkpoints"
-        ckpts = [ckpt for ckpt in model_ckpt_path.iterdir() if ckpt.suffix == ".ckpt"]
-        # print(ckpts)
-        if "last.ckpt" in [ckpt.name for ckpt in ckpts] and use_last:
-            model_ckpt = model_ckpt_path / "last.ckpt"
-        else:
-            ckpts_f = [ckpt for ckpt in ckpts if "last.ckpt" not in ckpt.name]
-            ckpts_f.sort(key=lambda x: x.name.split("=")[1].split("-")[0])
-            if len(ckpts_f) == 0:
-                raise FileNotFoundError(
-                    "Path {} has no checkpoints ".format(model_ckpt_path)
-                )
-            model_ckpt = ckpts_f[-1]
-        return model_ckpt
+        ckpt = torch.load(path, map_location="cpu")
+        missing, unexpected = self.load_state_dict(ckpt["state_dict"], strict=False)
+        if "pos_weight" in missing:
+            logger.warning("pos_weight missing in checkpoint; keeping current value.")
+        if len(unexpected) > 0:
+            logger.warning(f"Unexpected keys: {unexpected}")

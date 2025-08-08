@@ -8,3 +8,4 @@ transform_test: null
 batch_size: 128
 num_workers: 20
 persistent_workers: true
+multilabel: true

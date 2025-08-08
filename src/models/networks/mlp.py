@@ -21,6 +21,7 @@ class MLP(nn.Module):
         last_dim = dim_in
         for h in hidden_dims:
             layers.append(nn.Linear(last_dim, h))
+            layers.append(nn.BatchNorm1d(h))  # Add BatchNorm after Linear
             layers.append(non_lin())
             if dropout_p > 0:
                 layers.append(nn.Dropout(p=dropout_p))
@@ -33,6 +34,13 @@ class MLP(nn.Module):
 
     def forward(self, x):
         return self.layers(x)
+
+    def get_features(self, x):
+        # Return penultimate activations (before final Linear)
+        feats = x
+        for layer in self.layers[:-1]:
+            feats = layer(feats)
+        return feats
 
 
 @register_model

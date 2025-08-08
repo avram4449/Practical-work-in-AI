@@ -16,10 +16,29 @@ from .batchbald_redux.batchbald import get_batchbald_batch
 NAMES = ["bald", "entropy", "random", "batchbald", "variationratios"]
 
 
+def bald_bernoulli(logits_mc: torch.Tensor):
+    """
+    Bernoulli (multi-label) BALD.
+    logits_mc: [B,K,C] or [B,1,C]
+    Returns per-sample mutual information (mean over classes).
+    """
+    if logits_mc.dim() == 2:
+        logits_mc = logits_mc.unsqueeze(1)
+    probs = torch.sigmoid(logits_mc)          # [B,K,C]
+    mean_p = probs.mean(dim=1)                # [B,C]
+    eps = 1e-8
+    H_mean = - (mean_p * torch.log(mean_p + eps) + (1 - mean_p) * torch.log(1 - mean_p + eps))  # [B,C]
+    H_each = - (probs * torch.log(probs + eps) + (1 - probs) * torch.log(1 - probs + eps))      # [B,K,C]
+    E_H = H_each.mean(dim=1)                  # [B,C]
+    MI = H_mean - E_H                         # [B,C]
+    return MI.mean(dim=1)                     # [B]
+
+
 def get_acq_function(cfg, pt_model) -> Callable[[torch.Tensor], torch.Tensor]:
     name = str(cfg.query.name).split("_")[0]
+    multilabel = bool(getattr(cfg.data, "multilabel", False))
     if name == "bald":
-        return _get_bald_fct(pt_model)
+        return _get_bald_fct(pt_model, multilabel=multilabel, k=getattr(cfg.model, "k", 1))
     elif name == "entropy":
         return _get_bay_entropy_fct(pt_model)
     elif name == "random":
@@ -130,13 +149,16 @@ def _get_exp_entropy_fct(pt_model: torch.nn.Module):
     return acq_exp_entropy
 
 
-def _get_bald_fct(pt_model: torch.nn.Module):
+def _get_bald_fct(pt_model: torch.nn.Module, multilabel: bool = False, k: int = 1):
     def acq_bald(x: torch.Tensor):
-        """Returns the BALD-acq values (Mutual Information) between most likely labels and the model parameters"""
         with torch.no_grad():
-            out = pt_model(x, agg=False)
-            mut_info = mutual_bald(out)
-        return mut_info
+            # Force MC sampling with k
+            out = pt_model(x, agg=False, k=k)  # expect [B,K,C]
+            if multilabel:
+                scores = bald_bernoulli(out)
+            else:
+                scores = mutual_bald(out)  # softmax multi-class case
+        return scores
 
     return acq_bald
 

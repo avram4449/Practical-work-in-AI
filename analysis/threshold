@@ -1,0 +1,14 @@
+import pandas as pd
+
+# Load your test_predictions.csv
+df = pd.read_csv(r"C:\FILES\jku\Semester 6\Practical work\realistic-al-open-source\experiments\test\2025-06-10_15-46-59-382744\loop-19\test_predictions.csv")
+
+# Apply threshold: >0.5 is positive (1), else negative (0)
+for i in range(12):
+    df[f'pred_label_{i}'] = (df[f'pred_target_{i}'] > 0.5).astype(int)
+
+# Now you can see for each sample and target:
+# - pred_target_X: predicted probability
+# - pred_label_X: predicted class (0 or 1)
+# - true_target_X: ground truth
+print(df[[f'pred_target_0', f'pred_label_0', f'true_target_0']].head(1000))

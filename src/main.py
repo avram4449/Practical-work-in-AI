@@ -110,6 +110,19 @@ def active_loop(
         metric_dict = dict(metric_df.iloc[-1])
         metrics_df.append(metric_dict)
     metrics_df = pd.DataFrame(metrics_df)
+    metrics_df['iteration'] = metrics_df.index  # Add iteration column
+
+    # Melt to long-form: one row per (iteration, class)
+    n_classes = 12
+    auc_cols = [f"test/auc_class_{i}" for i in range(n_classes)]
+    if all(col in metrics_df.columns for col in auc_cols):
+        long_df = metrics_df.melt(id_vars=['iteration'], value_vars=auc_cols,
+                                  var_name='class', value_name='auc')
+        long_df['class'] = long_df['class'].str.extract(r'(\d+)$').astype(int)
+        long_df.to_csv(os.path.join(store_path, "test_metrics_long.csv"), index=False)
+    else:
+        print("Per-class AUC columns not found in metrics. Only macro AUC will be available.")
+
     metrics_df.to_csv(os.path.join(store_path, "test_metrics.csv"))
 
     val_accs = np.array([active_store.accuracy_val for active_store in active_stores])

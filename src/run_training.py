@@ -74,17 +74,31 @@ def label_active_dm(
     datamodule: BaseDataModule,
     balanced_per_cls: int = 5,
 ):
-    """Label the Dataset according to rules.
-    Specific for imbalanced datasets (miotcd, isic2019, isic2016 & datamodule.imbalance=True)
-
-    Args:
-        cfg (DictConfig): config from main
-        num_labelled (int): number of samples for anntation
-        balanced (bool): label (part of dataset) balanced
-        datamodule (BaseDataModule): Datamodule with active train_set
-        balanced_per_cls (int, optional): #samples drawn balanced per class for specific cases. Defaults to 5.
-    """
+    """Label the Dataset according to rules."""
     cfg.data.num_classes = cfg.data.num_classes
+
+    # --- Tox21 (multi-label) handling (FIX) ---
+    if cfg.data.name == "tox21":
+        # If already labelled (resume) skip
+        if datamodule.train_set.n_labelled > 0:
+            return
+
+        # Option: multi-label balanced seeding
+        use_ml_balance = getattr(cfg.active, "multilabel_balanced_seed", True) and balanced
+        if use_ml_balance:
+            _label_multilabel_balanced(
+                datamodule.train_set,
+                num_classes=cfg.data.num_classes,
+                budget=num_labelled,
+                rng_seed=cfg.trainer.seed,
+            )
+        else:
+            datamodule.train_set.label_randomly(num_labelled)
+
+        assert datamodule.train_set.n_labelled > 0, "No initial labels assigned for Tox21."
+        return
+    # --- end tox21 fix ---
+
     if cfg.data.name in ["isic2019", "miotcd", "isic2016"] and balanced:
         label_balance = cfg.data.num_classes * balanced_per_cls
         datamodule.train_set.label_balanced(
@@ -136,3 +150,43 @@ def train(cfg: DictConfig):
 
 if __name__ == "__main__":
     main()
+
+def _label_multilabel_balanced(active_ds, num_classes: int, budget: int, rng_seed: int = 0):
+    """
+    Heuristic: cover positives per class first, then fill remainder randomly.
+    """
+    import numpy as np
+    rng = np.random.default_rng(rng_seed)
+
+    # Pool indices (unlabelled)
+    pool_indices = (~active_ds.labelled).nonzero()[0]
+    # Extract labels for pool
+    lbl_matrix = []
+    for idx in pool_indices:
+        x, y = active_ds._dataset[idx]
+        lbl_matrix.append(y.numpy() if hasattr(y, "numpy") else np.array(y))
+    lbl_matrix = np.stack(lbl_matrix)  # [P, C]
+
+    picked = set()
+    # Pass 1: one positive per class where possible
+    for c in range(num_classes):
+        pos_idx = np.where(lbl_matrix[:, c] == 1)[0]
+        pos_idx = [pool_indices[p] for p in pos_idx if pool_indices[p] not in picked]
+        if pos_idx:
+            choice = rng.choice(pos_idx)
+            # convert oracle index to pool-relative index
+            pool_rel = active_ds._oracle_to_pool_index(choice)[0]
+            active_ds.label(pool_rel)
+            picked.add(choice)
+            if len(picked) >= budget:
+                return
+
+    # Pass 2: fill remaining randomly
+    remaining_pool_oracle = [i for i in pool_indices if i not in picked]
+    rng.shuffle(remaining_pool_oracle)
+    for oracle_idx in remaining_pool_oracle:
+        pool_rel = active_ds._oracle_to_pool_index(oracle_idx)[0]
+        active_ds.label(pool_rel)
+        picked.add(oracle_idx)
+        if len(picked) >= budget:
+            break
