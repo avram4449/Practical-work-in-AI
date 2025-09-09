@@ -1,6 +1,6 @@
 name: fcnet                     # model architecture identifier
-dropout: 0.3                    # dropout rate
-k: 20                            # number of MC samples
+dropout: 0.4                    # dropout rate
+k: 20                           # number of MC samples
 load_pretrained: false          # whether to load pretrained weights
 use_ema: false                  # use Exponential Moving Average model
 ema_decay: 0.999                # decay for EMA

@@ -63,7 +63,6 @@ class QuerySampler:
         Returns:
             Tuple[np.ndarray, np.ndarray]: Queries [pool_indices, rankvalue]
         """
-        # this random does not require predicting the whole unlabeled set.
         if self.acq_method == "random" and fastrandom:
             acq_inds = np.random.choice(
                 np.arange(len(datamodule.train_set.pool)),
@@ -73,14 +72,10 @@ class QuerySampler:
             acq_vals = np.arange(self.cfg.active.acq_size) * -1
 
         else:
-            # possibility to select random subset of pool with certain Size via parameter m
             pool_loader = datamodule.pool_dataloader(
                 batch_size=datamodule.batch_size, m=self.m
             )
 
-            # Core Set uses test transformations for the labeled set.
-            # Own results indicate that there is no difference in performance
-            # labeled_loader = datamodule.train_dataloader() # This is deprecated, CoreSet uses Test time transforms for labeled data
             labeled_loader = datamodule.labeled_dataloader(
                 batch_size=datamodule.batch_size
             )
@@ -143,18 +138,6 @@ class QuerySampler:
     def ranking_step(
         self, pool_loader: DataLoader, labeled_loader: DataLoader
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Computes Ranking of the data and returns indices of
-        data to be acquired (with scores if possible).
-
-        Acquisition Strategy: Values with highest scores are acquired.
-
-        Args:
-            pool_loader (DataLoader): unlabeled dataloader w.o. augmentations
-            labeled_loader (DataLoader): labeled dataloader w.o. augmentations
-
-        Returns:
-            indices, scores: indices of the pool and scores for acquisition
-        """
         acq_size = self.acq_size
         pool_len = len(pool_loader.dataset)
         print(f"DEBUG: Pool size for acquisition: {pool_len}")
@@ -162,6 +145,7 @@ class QuerySampler:
             raise ValueError("No unlabelled samples left in the pool for acquisition.")
         if self.acq_method.split("_")[0] in query_uncertainty.NAMES:
             prev_mode = self.model.training
+            self.model.train()  
             enable_dropout_only(self.model)
             import torch
 
@@ -179,27 +163,23 @@ class QuerySampler:
                 )
             if isinstance(acq_scores, np.ndarray) and np.allclose(acq_scores.var(), 0):
                 print("WARNING: Acquisition scores variance is ~0 (uncertainty collapse).")
-            # Diversity re-rank (optional)
             if self.acq_method.startswith("bald") and getattr(self.cfg.active, "diversity_rerank", False):
                 oversample = getattr(self.cfg.active, "diversity_oversample", 5)
                 top_k = min(len(acq_scores), oversample * acq_size)
                 top_inds = acq_ind[:top_k]
-                # Extract features for candidate pool
                 feat_list = []
-                self.model.eval()  # deterministic features
+                self.model.eval()  
                 with torch.no_grad():
                     for idx in top_inds:
                         x,_ = pool_loader.dataset[idx]
                         x = x.to(self.device).unsqueeze(0)
-                        feats = self.model.model.get_features(x)  # underlying MLP
+                        feats = self.model.model.get_features(x)  
                         feat_list.append(feats.cpu())
                 feats = torch.cat(feat_list, dim=0)
                 feats = torch.nn.functional.normalize(feats, dim=1)
-                # Farthest-first selection
                 sel = []
                 if feats.size(0) > 0:
-                    dmat = 1 - feats @ feats.T  # cosine distance
-                    # start with highest BALD score
+                    dmat = 1 - feats @ feats.T 
                     sel.append(0)
                     while len(sel) < min(acq_size, feats.size(0)):
                         remaining = list(set(range(feats.size(0))) - set(sel))

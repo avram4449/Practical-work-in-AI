@@ -1,5 +1,5 @@
 import math
-from typing import Callable, Tuple
+from typing import Callable, Tuple, Optional
 
 import numpy as np
 import torch
@@ -16,29 +16,85 @@ from .batchbald_redux.batchbald import get_batchbald_batch
 NAMES = ["bald", "entropy", "random", "batchbald", "variationratios"]
 
 
-def bald_bernoulli(logits_mc: torch.Tensor):
+def bald_bernoulli(
+    logits_mc: torch.Tensor,
+    weights: Optional[torch.Tensor] = None,
+    agg: str = "mean",
+    topk: Optional[int] = None,
+):
     """
-    Bernoulli (multi-label) BALD.
+    Bernoulli (multi-label) BALD with flexible aggregation.
     logits_mc: [B,K,C] or [B,1,C]
-    Returns per-sample mutual information (mean over classes).
+    weights: optional per-class weights [C] (will be normalized)
+    agg: "mean" | "weighted" | "topk_mean" | "max"
+    topk: used when agg == "topk_mean" (e.g., 3)
+    Returns: [B] scores
     """
     if logits_mc.dim() == 2:
-        logits_mc = logits_mc.unsqueeze(1)
-    probs = torch.sigmoid(logits_mc)          # [B,K,C]
-    mean_p = probs.mean(dim=1)                # [B,C]
+        logits_mc = logits_mc.unsqueeze(1) 
+    probs = torch.sigmoid(logits_mc)              
+    mean_p = probs.mean(dim=1)                    
     eps = 1e-8
-    H_mean = - (mean_p * torch.log(mean_p + eps) + (1 - mean_p) * torch.log(1 - mean_p + eps))  # [B,C]
-    H_each = - (probs * torch.log(probs + eps) + (1 - probs) * torch.log(1 - probs + eps))      # [B,K,C]
-    E_H = H_each.mean(dim=1)                  # [B,C]
-    MI = H_mean - E_H                         # [B,C]
-    return MI.mean(dim=1)                     # [B]
+    H_mean = - (mean_p * torch.log(mean_p + eps) + (1 - mean_p) * torch.log(1 - mean_p + eps))  
+    H_each = - (probs * torch.log(probs + eps) + (1 - probs) * torch.log(1 - probs + eps))      
+    E_H = H_each.mean(dim=1)                      
+    MI = H_mean - E_H                             
+
+    if agg == "max":
+        return MI.max(dim=1).values 
+
+    if agg == "topk_mean":
+        k = topk if topk is not None else max(1, MI.shape[1] // 4)
+        top_vals, _ = MI.topk(k=min(k, MI.shape[1]), dim=1)
+        return top_vals.mean(dim=1)
+
+    if agg == "weighted" and weights is not None:
+        w = weights
+        if w.dim() == 1:
+            w = w / (w.sum() + eps)
+            w = w.view(1, -1)       
+        return (MI * w).sum(dim=1)  
+
+    return MI.mean(dim=1)            
 
 
 def get_acq_function(cfg, pt_model) -> Callable[[torch.Tensor], torch.Tensor]:
     name = str(cfg.query.name).split("_")[0]
     multilabel = bool(getattr(cfg.data, "multilabel", False))
     if name == "bald":
-        return _get_bald_fct(pt_model, multilabel=multilabel, k=getattr(cfg.model, "k", 1))
+        k_acq = int(getattr(cfg.query, "k_acq", getattr(cfg.model, "k", 1)))
+        agg = str(getattr(cfg.query, "bald_agg", "mean"))
+        topk = getattr(cfg.query, "bald_topk", None)
+        weight_mode = str(getattr(cfg.query, "bald_weight_mode", "none"))  
+
+        weights = None
+        if multilabel and weight_mode != "none":
+            pw = getattr(pt_model, "pos_weight", None)
+            if pw is not None:
+                with torch.no_grad():
+                    if weight_mode == "pos_weight":
+                        w = pw.clone().float()
+                    elif weight_mode == "sqrt_pos_weight":
+                        w = pw.clone().float().sqrt()
+                    elif weight_mode == "inv_pos_weight":
+                        w = (1.0 / (pw.clone().float().clamp(min=1e-6)))
+                    else:
+                        w = None
+                    if w is not None:
+                        weights = w
+
+        def _acq_bald(x: torch.Tensor):
+            """Multi-label BALD with flexible aggregation."""
+            with torch.no_grad():
+                out = pt_model(x, agg=False, k=k_acq)  
+                if multilabel:
+                    w_dev = None if weights is None else weights.to(out.device)
+                    scores = bald_bernoulli(out, weights=w_dev, agg=agg, topk=topk)
+                else:
+                    scores = mutual_bald(out)  
+            return scores
+
+        return _acq_bald
     elif name == "entropy":
         return _get_bay_entropy_fct(pt_model)
     elif name == "random":
@@ -56,14 +112,12 @@ def get_post_acq_function(
 ) -> Callable[[np.ndarray], Tuple[np.ndarray, np.ndarray]]:
     names = str(cfg.query.name).split("_")
     if cfg.query.name == "batchbald":
-        # This values should only be used to select the entropy computation
-        num_samples = 40000  # taken from BatchBALD
+        num_samples = 40000 
 
         def post_acq_function(logprob_n_k_c: np.ndarray, acq_size: int):
             """BatchBALD acquisition function using logits with iterative conditional mutual information."""
             assert (
                 len(logprob_n_k_c.shape) == 3
-            )  # make sure that input is of correct type
             logprob_n_k_c = torch.from_numpy(logprob_n_k_c).to(
                 device=device, dtype=torch.double
             )
@@ -84,7 +138,7 @@ def get_post_acq_function(
 
         def post_acq_function(acq_scores: np.ndarray, acq_size: int):
             """Acquires based on ranking. Highest ranks are acquired first."""
-            assert len(acq_scores.shape) == 1  # make sure that input is of correct type
+            assert len(acq_scores.shape) == 1  
             acq_ind = np.arange(len(acq_scores))
             inds = np.argsort(acq_scores)[::-1]
             inds = inds[:acq_size]
@@ -112,7 +166,7 @@ def query_sampler(
     for i, batch in enumerate(dataloader):
         acq_values = acq_from_batch(batch, acq_function, device=device)
         if acq_values is None or len(acq_values) == 0:
-            continue  # skip empty batches
+            continue  
         if acq_list is None:
             shape = acq_values.shape
             new_shape = (len(dataloader) * dataloader.batch_size, *shape[1:])
@@ -131,7 +185,7 @@ def _get_bay_entropy_fct(pt_model: torch.nn.Module):
     def acq_bay_entropy(x: torch.Tensor):
         """Returns the Entropy of predictions of the bayesian model"""
         with torch.no_grad():
-            out = pt_model(x, agg=False)  # BxkxD
+            out = pt_model(x, agg=False)  
             ent = pred_entropy(out)
         return ent
 
@@ -152,12 +206,11 @@ def _get_exp_entropy_fct(pt_model: torch.nn.Module):
 def _get_bald_fct(pt_model: torch.nn.Module, multilabel: bool = False, k: int = 1):
     def acq_bald(x: torch.Tensor):
         with torch.no_grad():
-            # Force MC sampling with k
-            out = pt_model(x, agg=False, k=k)  # expect [B,K,C]
+            out = pt_model(x, agg=False, k=k) 
             if multilabel:
                 scores = bald_bernoulli(out)
             else:
-                scores = mutual_bald(out)  # softmax multi-class case
+                scores = mutual_bald(out)  
         return scores
 
     return acq_bald
@@ -195,9 +248,8 @@ def _get_random_fct():
 
 
 def pred_entropy(logits):
-    # logits: [B, k, D] or [B, D]
     if logits.dim() == 2:
-        logits = logits.unsqueeze(1)  # [B, 1, D]
+        logits = logits.unsqueeze(1) 
     out = F.log_softmax(logits, dim=2)
     p = out.exp()
     entropy = -(p * out).sum(dim=2).mean(dim=1)
@@ -206,16 +258,15 @@ def pred_entropy(logits):
 
 def var_ratios(logits: torch.Tensor):
     k = logits.shape[1]
-    out = F.log_softmax(logits, dim=2)  # BxkxD
-    out = torch.logsumexp(out, dim=1) - math.log(k)  # BxkxD --> BxD
-    out = 1 - torch.exp(out.max(dim=-1).values)  # B
+    out = F.log_softmax(logits, dim=2) 
+    out = torch.logsumexp(out, dim=1) - math.log(k) 
+    out = 1 - torch.exp(out.max(dim=-1).values) 
     return out
 
 
 def exp_entropy(logits: torch.Tensor):
-    # logits: [B, k, D] or [B, D]
     if logits.dim() == 2:
-        logits = logits.unsqueeze(1)  # [B, 1, D]
+        logits = logits.unsqueeze(1)
     out = F.log_softmax(logits, dim=2)
     p = out.exp()
     entropy = -(p * out).sum(dim=2)

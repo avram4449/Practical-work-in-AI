@@ -34,13 +34,12 @@ class ActiveTrainingLoop(object):
         base_dir: str = os.getcwd(), 
         loggers: str = True,
     ):
-        # Class capturing the logic for Active Training Loops.
         self.cfg = cfg
         self.datamodule = deepcopy(datamodule)
         self.count = count
         self.active = active
         self.device = "cuda:0"
-        self.base_dir = Path(base_dir)  # carries path to run
+        self.base_dir = Path(base_dir)  
         self._save_dict = dict()
         self._init_model()
         self.ckpt_callback = self._init_ckpt_callback()
@@ -173,7 +172,6 @@ class ActiveTrainingLoop(object):
 
     def _fit(self):
         dm = self.model.wrap_dm(self.datamodule)
-        # Initial pos_weight
         self.model.setup_data_params(dm)
 
         self.trainer.fit(model=self.model, datamodule=dm)
@@ -181,9 +179,7 @@ class ActiveTrainingLoop(object):
         if not self.cfg.trainer.fast_dev_run and self.cfg.trainer.load_best_ckpt:
             best_path = self.ckpt_callback.best_model_path
             logger.info(f"Final Model from: {best_path}")
-            # STRICT load (no silent skips)
             self.model = self.model.load_from_checkpoint(best_path, strict=True)
-            # Recompute pos_weight for CURRENT labelled set (active learning changed it)
             self.model.setup_data_params(dm)
             logger.info("Recomputed pos_weight after checkpoint restore.")
         else:
@@ -234,7 +230,6 @@ class ActiveTrainingLoop(object):
         preds = []
         trues = []
         indices = []
-        # Try to get SMILES or IDs if available
         smiles_list = getattr(datamodule.test_dataset, "smiles", None)
         ids_list = getattr(datamodule.test_dataset, "ID", None)
         for i, (x, y) in enumerate(test_loader):
@@ -251,7 +246,6 @@ class ActiveTrainingLoop(object):
         for i in range(trues.shape[1]):
             df[f"true_target_{i}"] = trues[:, i]
         df["index"] = indices
-        # Optionally add SMILES or IDs if available
         if smiles_list is not None:
             df["smiles"] = smiles_list
         if ids_list is not None:
@@ -270,6 +264,5 @@ class ActiveTrainingLoop(object):
             return
         if self.cfg.trainer.run_test:
             self._test()
-            # --- Save per-compound predictions after test ---
             ActiveTrainingLoop.save_test_predictions(self.model, self.datamodule, self.log_dir)
         self.final_callback()

@@ -5,7 +5,7 @@ from sklearn.metrics import roc_auc_score
 import matplotlib.pyplot as plt
 
 # Directory containing all loop-* subfolders
-base_dir = r"C:\FILES\jku\Semester 6\Practical work\realistic-al-open-source\experiments\test\2025-08-08_20-03-52-128075"
+base_dir = r"C:\FILES\jku\Semester 6\Practical work\realistic-al-open-source\experiments\test\2025-08-11_16-08-17-533519"
 n_classes = 12
 
 # Load true number of labeled samples per iteration

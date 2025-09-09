@@ -6,7 +6,7 @@ try:
     from pl_bolts.utils.warnings import UnderReviewWarning
     warnings.filterwarnings("ignore", category=UnderReviewWarning)
 except ImportError:
-    pass  # If pl_bolts or UnderReviewWarning is not available, skip
+    pass  
 
 import math
 import os
@@ -80,7 +80,6 @@ def active_loop(
     metric_paths = []
     for i in range(num_iter):
         logger.info("Start Active Loop {}".format(i))
-        # Perform active learning iteration with training and labeling
         training_loop = ActiveTrainingLoop(
             cfg, count=i, datamodule=datamodule, base_dir=os.getcwd()
         )
@@ -102,17 +101,14 @@ def active_loop(
     store_path = "."
     metrics_df = []
     for metric_path in metric_paths:
-        # laod metrics from csv
         metric_df = pd.read_csv(os.path.join(metric_path, "metrics.csv"))
-        # select metrics for test  data
         cols = [col for col in metric_df.columns if "test" in col]
         metric_df = metric_df.loc[:, cols]
         metric_dict = dict(metric_df.iloc[-1])
         metrics_df.append(metric_dict)
     metrics_df = pd.DataFrame(metrics_df)
-    metrics_df['iteration'] = metrics_df.index  # Add iteration column
+    metrics_df['iteration'] = metrics_df.index  
 
-    # Melt to long-form: one row per (iteration, class)
     n_classes = 12
     auc_cols = [f"test/auc_class_{i}" for i in range(n_classes)]
     if all(col in metrics_df.columns for col in auc_cols):

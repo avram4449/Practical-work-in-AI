@@ -8,7 +8,7 @@ defaults:
   # - hydra/job_logging: colorlog
   # - hydra/hydra_logging: colorlog
   - active: standard
-  - query: bald
+  - query: random
 
 trainer:
   batch_size: 128
@@ -24,7 +24,7 @@ trainer:
   early_stop_mode: max
   early_stop_patience: 15
   early_stop_min_delta: 0.00001
-  seed: 23456
+  seed: 34567
 
 hydra:
   run:

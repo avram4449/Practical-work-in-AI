@@ -26,7 +26,6 @@ class AbstractClassifier(pl.LightningModule):
         self.auc_val = MultilabelAUROC(num_labels=num_classes)
         self.auc_test = MultilabelAUROC(num_labels=num_classes)
 
-        # Stable pos_weight buffer (always present, avoids missing key warnings)
         pw = torch.ones(num_classes, dtype=torch.float32)
         self.register_buffer("pos_weight", pw)
         self.loss_fct = nn.BCEWithLogitsLoss(pos_weight=self.pos_weight)
@@ -52,36 +51,30 @@ class AbstractClassifier(pl.LightningModule):
         model_forward = self.select_forward_model(ema=ema)
 
         if k is None:
-            # Use full MC only when not in training (e.g. acquisition / eval uncertainty)
             k = getattr(self, 'k', 1)
             if self.training:
-                k = 1  # keep training fast
+                k = 1  
 
         sig = inspect.signature(model_forward.forward if hasattr(model_forward, 'forward') else model_forward)
 
-        # If the underlying model supports internal k we can pass it, else loop
         if 'k' in sig.parameters:
             out = model_forward(x, k)
-            # Expect shape [B,K,C] when k>1, else [B,C]
         else:
             if k > 1:
                 outs = []
-                # Ensure dropout active if caller set model to train()/custom mode
                 for _ in range(k):
                     outs.append(model_forward(x))
-                out = torch.stack(outs, dim=1)  # [B,K,C]
+                out = torch.stack(outs, dim=1)  
             else:
-                out = model_forward(x)  # [B,C]
+                out = model_forward(x) 
 
         if agg:
-            # If we produced MC samples, aggregate by mean (logits)
             if out.dim() == 3:
                 return out.mean(dim=1)
             return out
         else:
-            # For downstream uncertainty code we always want [B,K,C]
             if out.dim() == 2:
-                out = out.unsqueeze(1)  # [B,1,C]
+                out = out.unsqueeze(1) 
             return out
 
     def mc_nll(self, logits: torch.Tensor) -> torch.Tensor:
@@ -156,8 +149,7 @@ class AbstractClassifier(pl.LightningModule):
             self.ema_weight_update = EMAWeightUpdate(eman=self.eman)
 
     def _compute_pos_weight_from_labelled(self, dm: pl.LightningDataModule):
-        # Use ONLY labelled subset
-        ds = dm.train_set  # ActiveLearningDataset
+        ds = dm.train_set 
         if not hasattr(ds, "labelled"):
             return
         labelled_mask = ds.labelled
@@ -167,16 +159,15 @@ class AbstractClassifier(pl.LightningModule):
         for idx, is_lab in enumerate(labelled_mask):
             if not is_lab:
                 continue
-            _, y = ds._dataset[idx]  # underlying dataset item
+            _, y = ds._dataset[idx]  
             ys.append(torch.as_tensor(y).unsqueeze(0))
         if not ys:
             return
-        y_all = torch.cat(ys, dim=0).float()  # [L,C] floats 0/1
+        y_all = torch.cat(ys, dim=0).float()  
         freq = y_all.mean(0).clamp(min=1e-6, max=1 - 1e-6)
         new_pw = (1 - freq) / freq
-        new_pw = new_pw.clamp(max=10.0)  # <-- Cap pos_weight to 10.0
+        new_pw = new_pw.clamp(max=10.0) 
         if new_pw.shape != self.pos_weight.shape:
-            # shape mismatch (should not happen) -> resize buffer
             self.register_buffer("pos_weight", new_pw.clone())
         else:
             self.pos_weight.copy_(new_pw)
@@ -195,7 +186,7 @@ class AbstractClassifier(pl.LightningModule):
     def step(
         self, batch: Tuple[torch.tensor, torch.tensor], k: int = None
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        x, y = batch  # y shape [B,C] multi-label 0/1
+        x, y = batch 
         logits = self.forward(x)
         loss = self.loss_fct(logits, y)
         preds = (torch.sigmoid(logits) > 0.5).float()
@@ -215,7 +206,7 @@ class AbstractClassifier(pl.LightningModule):
         """
         mode = "val"
         loss, logits, preds, y = self.step(batch)
-        y_int = y.int()  # <-- Ensure integer type
+        y_int = y.int()  
         self.acc_val.update(preds, y_int)
         self.auc_val.update(torch.sigmoid(logits), y_int)
         self.log(f"{mode}/loss", loss, on_step=False, on_epoch=True)
@@ -236,7 +227,7 @@ class AbstractClassifier(pl.LightningModule):
         """
         mode = "test"
         loss, logits, preds, y = self.step(batch)
-        y_int = y.int()  # <-- Ensure integer type
+        y_int = y.int() 
         self.acc_test.update(preds, y_int)
         self.auc_test.update(torch.sigmoid(logits), y_int)
         self.log(f"{mode}/loss", loss, on_step=False, on_epoch=True)
@@ -260,8 +251,6 @@ class AbstractClassifier(pl.LightningModule):
         self.acc_train.reset()
         if self.hparams.model.freeze_encoder:
             self.model.resnet.eval()
-        # When ema model is used during training, correct buffers should be used
-        # e.g. eman fixmatch should use eman-batchnorm for teacher!
         if self.ema_model is not None:
             self.ema_model.eval()
 
@@ -284,7 +273,6 @@ class AbstractClassifier(pl.LightningModule):
 
     def on_train_epoch_end(self) -> None:
         self.log("train/acc", self.acc_train.compute(), on_step=False, on_epoch=True)
-        # Add train loss average from history
         losses = self.trainer.callback_metrics.get("train/loss_epoch", None)
         if losses is not None:
             self.log("train/loss", losses, on_step=False, on_epoch=True)
@@ -295,7 +283,7 @@ class AbstractClassifier(pl.LightningModule):
         if losses is not None:
             self.log("val/loss", losses, on_step=False, on_epoch=True)
         auc_val = self.auc_val.compute()
-        if auc_val.ndim == 0:  # scalar
+        if auc_val.ndim == 0: 
             self.log("val/auc_macro", auc_val, on_step=False, on_epoch=True)
         else:
             for i, auc in enumerate(auc_val):
@@ -307,7 +295,7 @@ class AbstractClassifier(pl.LightningModule):
         self.log(f"{mode}/acc", self.acc_test.compute(), on_step=False, on_epoch=True)
         auc_test = self.auc_test.compute()
         print("AUC test shape:", getattr(auc_test, 'shape', 'scalar'), "values:", auc_test)
-        if auc_test.ndim == 0:  # scalar
+        if auc_test.ndim == 0: 
             self.log(f"{mode}/auc_macro", auc_test, on_step=False, on_epoch=True)
         else:
             for i, auc in enumerate(auc_test):

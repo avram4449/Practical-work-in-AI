@@ -141,7 +141,6 @@ class ActiveLearningDataset(torchdata.Dataset):
         pool_dataset = ActiveSubset(
             pool_dataset, (~self.labelled).nonzero()[0].reshape([-1]).tolist()
         )
-        # ald = ActiveLearningPool(pool_dataset, make_unlabelled=self.make_unlabelled)
         return pool_dataset
 
     @property
@@ -170,17 +169,16 @@ class ActiveLearningDataset(torchdata.Dataset):
         return [int(lbl_nz[idx].squeeze().item()) for idx in index]
 
     def _oracle_to_pool_index(self, index: Union[int, List[int]]) -> List[int]:
-        # Accept Python int, numpy.int64, etc.
         if isinstance(index, (int, np.integer)):
             index = [int(index)]
 
-        lbl_cs = np.cumsum(~self.labelled) - 1  # maps oracle idx -> pool idx
+        lbl_cs = np.cumsum(~self.labelled) - 1 
         out = []
         for idx in index:
             if idx < 0 or idx >= len(lbl_cs):
                 raise IndexError(f"Oracle index {idx} out of range 0..{len(lbl_cs)-1}")
             pool_idx = lbl_cs[idx]
-            if pool_idx < 0:  # already labelled
+            if pool_idx < 0:  
                 raise ValueError(f"Oracle index {idx} is already labelled.")
             out.append(int(pool_idx))
         return out
@@ -298,7 +296,7 @@ class ActiveLearningDataset(torchdata.Dataset):
         """Load the labelled map and random_state with give state_dict."""
         assert len(self._dataset) == len(
             state_dict["labelled"]
-        )  # length of statedict and dataset not equal
+        )  
         self.labelled = state_dict["labelled"]
         self.random_state = state_dict["random_state"]
 
@@ -344,7 +342,6 @@ class ActiveLearningPool(torchdata.Dataset):
         self.make_unlabelled = make_unlabelled
 
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, ...]:
-        # This datum is marked as unlabelled, so clear the label.
         return self.make_unlabelled(self._dataset[index])
 
     def __len__(self) -> int:

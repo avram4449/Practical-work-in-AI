@@ -68,8 +68,7 @@ class TorchVisionDM(BaseDataModule):
         self.mean = mean
         self.std = std
         self.shape = shape
-        #assert shape[-1] == len(mean)
-        #assert shape[-1] == len(std)
+
 
         self.train_transforms = get_transform(
             transform_train, self.mean, self.std, self.shape

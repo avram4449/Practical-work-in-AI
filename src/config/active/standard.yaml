@@ -1,7 +1,7 @@
-num_labelled: 500      # ~4% of training set
-acq_size: 250          # acquire 250 per iteration
-num_iter: 20           # 500 + 250*20 = 5,500 (well below 11,764)
-min_train: 100         # should match num_labelled or be less
+num_labelled: 20      # ~4% of training set
+acq_size: 20          # acquire 250 per iteration
+num_iter: 20          
+min_train: 20         # should match num_labelled or be less
 balanced: True
 random_split: True
 m: Null

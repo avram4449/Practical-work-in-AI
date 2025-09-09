@@ -77,13 +77,10 @@ def label_active_dm(
     """Label the Dataset according to rules."""
     cfg.data.num_classes = cfg.data.num_classes
 
-    # --- Tox21 (multi-label) handling (FIX) ---
     if cfg.data.name == "tox21":
-        # If already labelled (resume) skip
         if datamodule.train_set.n_labelled > 0:
             return
 
-        # Option: multi-label balanced seeding
         use_ml_balance = getattr(cfg.active, "multilabel_balanced_seed", True) and balanced
         if use_ml_balance:
             _label_multilabel_balanced(
@@ -97,7 +94,6 @@ def label_active_dm(
 
         assert datamodule.train_set.n_labelled > 0, "No initial labels assigned for Tox21."
         return
-    # --- end tox21 fix ---
 
     if cfg.data.name in ["isic2019", "miotcd", "isic2016"] and balanced:
         label_balance = cfg.data.num_classes * balanced_per_cls
@@ -145,7 +141,6 @@ def train(cfg: DictConfig):
         cfg, datamodule, active=False, base_dir=os.getcwd()
     )
     training_loop.main()
-    #training_loop.log_save_dict()
 
 
 if __name__ == "__main__":
