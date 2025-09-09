@@ -1,165 +1,138 @@
-<!-- # Active-Study -->
+# Practical Work in AI – Active Learning on Tox21
 
-# Realistic-AL
-<p align="">
-    <!-- <img alt="GitHub Workflow Status" src="https://img.shields.io/github/actions/workflow/status/IML-DKFZ/fd-shifts/pytest.yml?branch=main&label=tests"> -->
-    <a href="https://github.com/IML-DKFZ/realistic-al/blob/main/LICENSE">
-    <img alt="GitHub" src="https://img.shields.io/github/license/IML-DKFZ/realistic-al">
-    </a>
-    <!-- <a href="https://github.com/IML-DKFZ/fd-shifts/releases">
-        <img alt="GitHub release" src="https://img.shields.io/github/release/IML-DKFZ/fd-shifts.svg">
-    </a>
-    <a href="https://zenodo.org/badge/latestdoi/570145779"><img src="https://zenodo.org/badge/570145779.svg" alt="DOI"></a> -->
-</p>
+This repository contains the code and report for the **Practical Work in AI** project:  
+**Evaluating BALD with Monte Carlo Dropout versus Random Acquisition in Active Learning on the Tox21 Dataset**.
 
-##  *Navigating the Pitfalls of Active Learning Evaluation: A Systematic Framework for Meaningful Performance Assessment*
-#### Official Benchmark Implementation
+---
 
+## Project Overview
 
-### <a id="Abstract"></a> :books: Abstract
-> Active Learning (AL) aims to reduce the labeling burden by interactively selecting the most informative samples from a pool of unlabeled data. While there has been extensive research on improving AL query methods in recent years, some studies have questioned the effectiveness of AL compared to emerging paradigms such as semi-supervised (Semi-SL) and self-supervised learning (Self-SL), or a simple optimization of classifier configurations. Thus, today’s AL literature presents an inconsistent and contradictory landscape, leaving practitioners uncertain about whether and how to use AL in their tasks. In this work, we make the case that this inconsistency arises from a lack of systematic and realistic evaluation of AL methods. Specifically, we identify five key pitfalls in the current literature that reflect the delicate considerations required for AL evaluation. Further, we present an evaluation framework that overcomes these pitfalls and thus enables meaningful statements about the performance of AL methods. To demonstrate the relevance of our protocol, we present a large-scale empirical study and benchmark for image classification spanning various data sets, query methods, AL settings, and training paradigms. Our findings clarify the inconsistent picture in the literature and enable us to give hands-on recommendations for practitioners.
+Active Learning (AL) reduces labeling costs by selectively querying the most informative samples.  
+In this project, we compare two strategies:
 
-<p align="center">
-    <figure class="image">
-        <img src="./docs/assets/al_loop.png">
-        <figcaption style="font-size: small;">
-        <!-- There is no consensus regarding the performance gain of AL methods over random sampling in the literature, especially with regard to the cold start problem and orthogonal developments s.a. self-supervised and semi-supervised learning.  -->
-        As practitioners need to rely on the performance gains estimated in studies to make an informed choice whether to employ AL or not, as an evaluation would require additional label effort which defeats the purpose of using AL (validation paradox).
-        Therefore the evaluation needs to test AL methods with regard to the following requirements: 1) Generalization across varying data distributions, 2) robustness with regard to design choices of an AL pipeline 3), performance gains persist in combination with orthogonal approaches (e.g. Self-SL, Semi-SL).<br>
-		This benchmark aims at solving these issues by improving the evaluation upon 5 concrete pitfalls (P1-P5) in the literature (shown in action the figure above): <br>
-        P1: Lack of evaluated data distribution settings. 
-        P2: Lack of evaluated starting budgets.
-        P3: Lack of evaluated query sizes.
-        P4: Neglection of classifier configuration.
-        P5: Neglection of alternative training paradigms.
-        </figcaption>
-    </figure>
-</p>
+- **BALD with Monte Carlo Dropout** (uncertainty-based acquisition)  
+- **Random acquisition** (uninformed baseline)
 
-## <a id="Citing"></a>:scroll: Citing This Work
+on the **Tox21 molecular dataset**, which consists of ~12,000 compounds annotated with 12 toxicity endpoints.  
+We evaluate three labeling regimes: **420, 500, and 5500 samples**.
 
-If you use Realistic-AL, please cite our [paper](https://arxiv.org/abs/2301.10625)
+**Key findings:**
+- At **420 samples**, BALD underperforms Random (cold-start issue).  
+- At **500 samples**, BALD clearly outperforms Random.  
+- At **5500 samples**, both converge, but BALD maintains a modest edge.
 
-```bibtex
-@inproceedings{
-luth2023navigating,
-title={Navigating the Pitfalls of Active Learning Evaluation: A Systematic Framework for Meaningful Performance Assessment},
-author={Carsten Tim L{\"u}th and Till J. Bungert and Lukas Klein and Paul F Jaeger},
-booktitle={Thirty-seventh Conference on Neural Information Processing Systems},
-year={2023},
-url={https://openreview.net/forum?id=Dqn715Txgl}
-}
-```
+See the full details in the report.
 
-## <a id="ToC"></a> :pushpin: Table Of Contents
+---
 
-- [Realistic-AL](#realistic-al)
-  - [:books: Abstract](#Abstract)
-- [:scroll: Citing This Work](#Citing)
-- [:pushpin: Table Of Contents](#ToC)
-- [:wrench: Installation](#Installation)
-- [:open_file_folder: Project Structure](#Structure)
-- [:rocket: Usage](#Usage)
-  - [Set up of the environment variables](#set-up-of-the-environment-variables)
-  - [Running Experiments](#running-experiments)
-  - [Analysis](#analysis)
-- [:hammer: Integrating Integrate Your own Query Methods, Datasets, Trainings & Models](#Integrating)
-- [Acknowledgements](#acknowledgements)
+## Requirements & Environment Setup
 
-## <a id="Installation"></a> :wrench: Installation
+### Dependencies
 
-**Realistic-AL requires Python version 3.8.** It is recommended to
-install Realistic-AL in its own environment (venv, conda environment, ...).
+All dependencies are listed in `requirements.txt`.  
+Main libraries:
+- Python 3.9+
+- PyTorch 1.12.0 (see requirements.txt for tested version)
+- PyTorch Lightning
+- RDKit (install via `conda install -c conda-forge rdkit`)
+- scikit-learn
+- NumPy, SciPy
+- Matplotlib, Seaborn
 
-1. **Install an appropriate version of [PyTorch](https://pytorch.org/).** Check
-   that CUDA is available and that the CUDA toolkit version is compatible with
-   your hardware. The currently necessary version of
-   [pytorch is v.1.12.0](https://pytorch.org/get-started/previous-versions/#v1120).
-   Testing and Development was done with the pytorch version using CUDA 11.3.
-
-2. **Install Realistic-AL.** This will pull in all dependencies including some
-   version of PyTorch, it is strongly recommended that you install a compatible
-   version of PyTorch beforehand.
-   ```bash
-   pip install -e '.[dev]'
-   ```
-
-## <a id="Structure"></a> :open_file_folder: Project Structure 
-```
-├── analysis                # analysis & notebooks
-│   └── plots                   # plots
-├── launchers               # launchers for experiments
-├── ssl                     # simclr training 
-│   └── config                  # configs for simclr
-└── src                     # main project
-    ├── config                  # configs for main experiments
-    ├── data                    # everything data
-    ├── models                  # pl.Lightning models 
-    │   ├── callbacks               # lightning callbacks
-    │   └── networks                # model architecture
-    ├── plotlib                 # scripts for plotting
-    ├── query                   # query method
-    │   └── batchbald_redux         # batchbald implementation from BlackHC
-    ├── test                    # tests
-    └── utils                   # utility functions
-```
-
-## <a id="Usage"></a> :rocket: Usage
-
-To use `Realistic-AL` you need to:
-1. set two environment variables described below
-2. you may have to go through the code and change global variables which are highlighted with ### RUNNING ###
-
-Set up of the environment variables.
+### Setup
 
 ```bash
-export EXPERIMENT_ROOT=/absolute/path/to/your/experiments
-export DATA_ROOT=/absolute/path/to/datasets
+git clone https://github.com/<avram4449>/<Practical-work-in-AI>.git
+cd <Practical-work-in-AI>
+python3 -m venv venv
+source venv/bin/activate      # Linux/Mac
+.\venv\Scripts\activate       # Windows
+pip install -r requirements.txt
 ```
 
-Alternatively, you may write them to a file and source that before running
-`Realistic-AL`, e.g.
+---
+
+## Data
+
+We use the **Tox21** dataset.  
+- Preprocessed file: `data/tox21_compoundData_wSmiles.csv`  
+- Molecules are converted into **2048-bit ECFP6 fingerprints** using RDKit.  
+- Labels cover 12 binary toxicity endpoints.  
+
+**Dataset path configuration:**  
+Set the path to your dataset in the config file:  
+`src/config/data/tox21.yaml`
+```yaml
+csv_path: C:/FILES/jku/Semester 6/Practical work/realistic-al-open-source/src/data/tox21_compoundData_wSmiles.csv
+```
+Alternatively, you can override the path via command line or in `config.yaml`.
+
+---
+
+## Running Experiments
+
+### Train & Run Active Learning
 
 ```bash
-mv example.env .env
+python main.py
 ```
 
-Then edit `.env` to your needs and run
+This will:
+1. Load the Tox21 dataset.
+2. Initialize the MLP model.
+3. Run the AL loop with the chosen acquisition strategy (BALD or Random).
+4. Save logs to `experiments/test/`.
+
+### Experiment settings
+
+- **420 samples:** small fixed budget.
+- **500 samples:** small budget with minimal reliability.
+- **5500 samples:** 20 iterations × 250 acquisitions.
+
+Seeds used: `12345, 23456, 34567`.
+
+**To change acquisition strategy or other settings:**  
+Edit the config files in `src/config/` or override via Hydra command line arguments.
+
+---
+
+## Analysis & Visualization
+
+Analysis scripts and notebooks are in the `analysis/` folder.  
+For example, to plot per-class AUC curves:
 
 ```bash
-source .env
+python analysis/reportplot21.py experiments/test/
 ```
 
+This will generate grid plots comparing BALD and Random across all Tox21 targets.
 
+---
 
-### Running Experiments
-The experiment running is handled via the experiment launcher with specific files in `/launchers/{}.py`.
+## Project Structure
 
-More info can be found [here](launchers/README.md)
+```
+├── analysis/        # Jupyter notebooks and analysis scripts
+├── docs/            # Documentation and report
+├── experiments/     # Experiment configs and logs
+├── launchers/       # Scripts to launch experiments
+├── src/             # Main source code (models, query strategies, training)
+├── ssl/             # Additional resources
+├── visuals/         # Plots and figures
+├── requirements.txt # Python dependencies
+├── pyproject.toml   # Build metadata
+├── LICENSE          # License
+├── README.md        # This file
+```
 
+---
 
+## Reproducibility
 
-### Analysis
-The implemented analysis can be found in the folder `/analysis/` and consists of:
-1. Standard performance vs. labeled data plots
-2. Area Under Budget Curve (AUBC)
-3. Pairwise Penalty Matrices (PPM)
+All necessary information is provided to repeat the experiments.  
+- Dataset preprocessing and path configuration are described above.
+- Model architecture and training procedure are defined in the source code and config files.
+- Experiment settings and random seeds are specified.
+- Results and plots can be reproduced using the provided scripts.
 
-More info about the analysis can be found [here](analysis/README.md)
-
-
-## <a id="Integrating"></a> :hammer: Integrating Integrate Your own Query Methods, Datasets, Trainings & Models
-
-Query methods, baselines and datasets can be integrated into Realistic-AL allowing for simplified benchmarks.
-
-More information can be found [here](docs/integration.md)
-
-## Acknowledgements
-
-<p align="center">
-  <img src="https://polybox.ethz.ch/index.php/s/I6VJEPrCDW9zbEE/download" width="190"> &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="https://polybox.ethz.ch/index.php/s/kqDrOTTIzPFYPU7/download" width="91"> &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/d/d9/Deutsches_Krebsforschungszentrum_Logo.svg/1200px-Deutsches_Krebsforschungszentrum_Logo.svg.png" width="270">
-</p>
-
-Realistic-AL is developed and maintained by the [Interactive Machine Learning Group](https://iml-dkfz.github.io) of [Helmholtz Imaging](https://helmholtz-imaging.de) and the [DKFZ](https://www.dkfz.de/en/index.html). 
+---
